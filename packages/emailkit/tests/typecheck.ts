@@ -231,6 +231,79 @@ const outlookMixedClient = EmailKit({
 });
 void outlookMixedClient;
 
+// Application (Exchange RBAC) mode: app-only token, no mailbox connect, no
+// per-send auth, a concrete tenant.
+const outlookAppDriver = OutlookDriver({
+  id: "outlook-app",
+  clientId: "client_123",
+  clientSecret: "secret_123",
+  tenant: "tenant_123",
+  authMode: "application",
+  sendEmailMode: "draft",
+});
+const appThreading: true = outlookAppDriver.capabilities.nativeReplyThreading;
+const appConnect: false = outlookAppDriver.capabilities.mailboxConnect;
+const appSenderAuth: false = outlookAppDriver.capabilities.senderAuth;
+const appDriverId: "outlook-app" = outlookAppDriver.id;
+void appThreading;
+void appConnect;
+void appSenderAuth;
+void appDriverId;
+// @ts-expect-error application mode requires a tenant.
+OutlookDriver({
+  clientId: "client_123",
+  clientSecret: "secret_123",
+  authMode: "application",
+});
+// @ts-expect-error application mode uses its own token, not webhookAuth.
+OutlookDriver({
+  clientId: "client_123",
+  clientSecret: "secret_123",
+  tenant: "tenant_123",
+  authMode: "application",
+  webhookAuth: { accessToken: "access_123" },
+});
+
+const outlookAppClient = EmailKit({ emailDrivers: [outlookAppDriver] });
+outlookAppClient.sendEmail({
+  from: { email: "support@example.com" },
+  to: { email: "recipient@example.com" },
+  subject: "App-only send",
+  text: "Hi",
+  sender: {
+    emailDriver: "outlook-app" as const,
+    mailbox: { id: "user_guid", email: "support@example.com" },
+  },
+});
+outlookAppClient.sendEmail({
+  from: { email: "support@example.com" },
+  to: { email: "recipient@example.com" },
+  subject: "App-only send",
+  text: "Hi",
+  sender: {
+    emailDriver: "outlook-app" as const,
+    // @ts-expect-error application mode does not take per-send auth.
+    auth: { accessToken: "access_123" },
+  },
+});
+void outlookAppClient.mailboxes.webhooks.setup({
+  emailDriver: "outlook-app",
+  mailbox: { id: "user_guid", email: "support@example.com" },
+  events: ["inbound"],
+});
+void outlookAppClient.mailboxes.webhooks.refresh({
+  emailDriver: "outlook-app",
+  providerId: "sub_123",
+  mailbox: { id: "user_guid", email: "support@example.com" },
+});
+void outlookAppClient.mailboxes.sync({
+  emailDriver: "outlook-app",
+  mailbox: { id: "user_guid", email: "support@example.com" },
+  since: new Date(),
+});
+// @ts-expect-error application mode cannot connect mailboxes through OAuth.
+void outlookAppClient.mailboxes.connect({ email: "support@example.com" });
+
 // replyHeaders drivers keep accepting RFC reply headers unchanged.
 void mailgunSendDriver.sendEmail({
   from: { email: "support@example.com" },

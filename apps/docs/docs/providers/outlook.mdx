@@ -315,3 +315,73 @@ if (record && connected) {
 
 await prisma.connectedMailbox.delete({ where: { email: mailboxEmail } });
 ```
+
+## Application auth (Exchange Online RBAC)
+
+Use this when an admin grants your app access to a set of mailboxes once, instead of each user signing in. The driver gets its own app-only token and addresses mailboxes as Graph `users/{id}`. Exchange [RBAC for Applications](https://learn.microsoft.com/exchange/permissions-exo/application-rbac) decides which mailboxes it may reach. Every other mailbox fails with Graph 403.
+
+### Grant access in Exchange
+
+Use the same app registration and client secret. Do **not** add Graph *application* permissions such as `Mail.Send` or `Mail.ReadWrite` in Entra. Entra grants and RBAC grants add up, so a tenant-wide Entra grant would make the scope below meaningless.
+
+```powershell
+Connect-ExchangeOnline
+
+# Object id of the *enterprise application*, not of the app registration.
+New-ServicePrincipal -AppId <client-id> -ObjectId <enterprise-app-object-id> -DisplayName "emailkit"
+
+New-ManagementScope -Name "emailkit mailboxes" `
+  -RecipientRestrictionFilter "CustomAttribute1 -eq 'emailkit'"
+
+New-ManagementRoleAssignment -App <client-id> -Role "Application Mail.ReadWrite" -CustomResourceScope "emailkit mailboxes"
+New-ManagementRoleAssignment -App <client-id> -Role "Application Mail.Send" -CustomResourceScope "emailkit mailboxes"
+
+# Check one mailbox inside and one outside the scope.
+Test-ServicePrincipalAuthorization -Identity <client-id> -Resource support@contoso.com
+```
+
+Mark the mailboxes the app may use with `Set-Mailbox support@contoso.com -CustomAttribute1 emailkit`. Microsoft notes that RBAC changes can take up to two hours to apply.
+
+### Configure the driver
+
+```ts title="src/emailkit.ts"
+const outlookApp = OutlookDriver({
+  id: "outlook-app",
+  authMode: "application",
+  tenant: process.env.OUTLOOK_TENANT_ID!, // a tenant id or domain, not "common"
+  clientId: process.env.OUTLOOK_CLIENT_ID!,
+  clientSecret: process.env.OUTLOOK_CLIENT_SECRET!,
+  sendEmailMode: "draft",
+  webhookClientState: process.env.OUTLOOK_WEBHOOK_CLIENT_STATE!,
+});
+```
+
+It can run next to the delegated `outlook` driver in the same `emailDrivers` list. Application mode has no `mailboxes.connect`, no `sender.auth` and no `webhookAuth`/`webhookAuthResolver`, and TypeScript rejects them. Every operation takes a `mailbox` instead. Put the Graph user id or the UPN in `mailbox.id`, or pass only `mailbox.email`.
+
+```ts
+const mailbox = { id: "<graph-user-id>", email: "support@contoso.com" };
+
+await emailkit.sendEmail({
+  from: { email: mailbox.email },
+  to: { email: "customer@example.com" },
+  subject: "Hello",
+  text: "Sent with the app's own token.",
+  sender: { emailDriver: "outlook-app", mailbox },
+});
+
+await emailkit.mailboxes.webhooks.setup({
+  emailDriver: "outlook-app",
+  mailbox,
+  events: ["inbound"],
+});
+
+await emailkit.mailboxes.webhooks.refresh({
+  emailDriver: "outlook-app",
+  providerId: record.providerId,
+  mailbox,
+});
+
+await emailkit.mailboxes.sync({ emailDriver: "outlook-app", mailbox, since });
+```
+
+Notifications for this driver arrive on `/api/email/outlook-app` and are hydrated with the app token, so you do not store any auth. `inboundResource` is still written relative to `me` (for example `me/mailFolders('Inbox')/messages`), and the driver swaps `me` for the addressed mailbox. The token is cached per driver instance and refreshed shortly before it expires.

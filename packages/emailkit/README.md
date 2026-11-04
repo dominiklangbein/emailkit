@@ -310,7 +310,9 @@ about 7 days; EmailKit renews active watches opportunistically and reports
 
 ### Outlook
 
-Outlook uses delegated Microsoft Graph mailbox auth. Register your EmailKit
+Outlook uses delegated Microsoft Graph mailbox auth by default. For app-only
+access limited by Exchange Online RBAC for Applications, set
+`authMode: "application"` (see the Outlook provider docs). Register your EmailKit
 route as a Web redirect URI in Microsoft Entra, then configure the driver:
 
 ```ts
