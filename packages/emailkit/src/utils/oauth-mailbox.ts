@@ -17,12 +17,14 @@ import type {
   Mailbox,
   MailboxIdentity,
   MailboxSyncInput,
+  MailboxWebhookTarget,
   WebhookRequest,
 } from "../types";
 import { EmailKitError } from "../types";
 import { decodeOAuthState, type OAuthStatePayload } from "./oauth-state";
 
 export const TOKEN_REFRESH_LEEWAY_MS = 60_000;
+const CLIENT_CREDENTIALS_TIMEOUT_MS = 30_000;
 
 export interface OAuthMailboxAuth {
   accessToken: string;
@@ -183,7 +185,7 @@ export interface SyncMailboxProviderMetadata {
 }
 
 export const mailboxProviderMetadata = (
-  input: MailboxSyncInput,
+  input: MailboxWebhookTarget,
 ): SyncMailboxProviderMetadata => {
   const mailbox =
     input.mailbox &&
@@ -469,6 +471,39 @@ export const createOAuthMailboxKit = <TAuth extends OAuthMailboxAuth>({
     return auth;
   };
 
+  /**
+   * App-only (client-credentials) token getter. The token is cached and
+   * concurrent callers share one request, so the request is bounded by its own
+   * timeout instead of any single caller's signal.
+   */
+  const clientCredentialsAuth = (scope: string): (() => Promise<TAuth>) => {
+    const form = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "client_credentials",
+      scope,
+    });
+    let cached: TAuth | undefined;
+    let inflight: Promise<TAuth> | undefined;
+    return () => {
+      if (
+        cached?.expiresAt &&
+        cached.expiresAt > Date.now() + TOKEN_REFRESH_LEEWAY_MS
+      ) {
+        return Promise.resolve(cached);
+      }
+      inflight ??= fetchToken(
+        form,
+        AbortSignal.timeout(CLIENT_CREDENTIALS_TIMEOUT_MS),
+      )
+        .then((token) => (cached = toAuth(token)))
+        .finally(() => {
+          inflight = undefined;
+        });
+      return inflight;
+    };
+  };
+
   return {
     isAuth,
     requireSecret,
@@ -480,6 +515,7 @@ export const createOAuthMailboxKit = <TAuth extends OAuthMailboxAuth>({
     refreshAuth,
     refreshAuthIfNeeded,
     resolveMailboxOperationAuth,
+    clientCredentialsAuth,
   };
 };
 

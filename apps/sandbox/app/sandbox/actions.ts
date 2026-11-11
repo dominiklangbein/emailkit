@@ -11,7 +11,11 @@ import type {
 import { EmailKitSyncError } from "emailkit"
 
 import { emailkit } from "../emailkit"
-import { getSandboxDriverInfo, hasSandboxDriver } from "./drivers"
+import {
+  configuredMailboxes,
+  getSandboxDriverInfo,
+  hasSandboxDriver,
+} from "./drivers"
 import {
   deletePersistedMailbox,
   listPersistedMailboxes,
@@ -226,7 +230,7 @@ export const handleMailboxAction = async (input: MailboxActionInput) => {
     case "list": {
       const driverMailboxes = caps.mailboxList
         ? await client.mailboxes.list({ ...input.options, emailDriver })
-        : []
+        : configuredMailboxes(emailDriver)
       driverMailboxes.forEach((mailbox) =>
         rememberMailbox(emailDriver, mailbox)
       )

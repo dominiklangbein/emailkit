@@ -281,15 +281,21 @@ export type {
 } from "./drivers/gmail";
 
 export {
+  OUTLOOK_APPLICATION_CAPABILITIES,
+  OUTLOOK_APPLICATION_DRAFT_CAPABILITIES,
   OUTLOOK_CAPABILITIES,
   OUTLOOK_DRAFT_CAPABILITIES,
   OutlookDriver,
   isOutlookAuth,
 } from "./drivers/outlook";
 export type {
+  OutlookApplicationCapabilitiesForSendMode,
+  OutlookApplicationDriverConfig,
+  OutlookAuthMode,
   OutlookCapabilities,
   OutlookCapabilitiesForSendMode,
   OutlookDraftCapabilities,
+  OutlookDriverBaseConfig,
   OutlookDriverConfig,
   OutlookMailboxAuth,
   OutlookSendEmailMode,
