@@ -6,6 +6,7 @@ import {
 } from "emailkit"
 
 import {
+  configuredMailboxes,
   defaultEmailDriver,
   readyEmailDrivers,
   type SandboxEmailDriver,
@@ -46,6 +47,13 @@ const resolveSender = async ({ from }: { from: EmailAddress }) => {
       ...(persisted.auth !== undefined ? { auth: persisted.auth } : {}),
     }
   }
+
+  const appDriver = readyEmailDrivers.find((driver) =>
+    configuredMailboxes(driver.id).some(
+      (mailbox) => mailbox.email.toLowerCase() === email
+    )
+  )
+  if (appDriver) return { emailDriver: appDriver.id }
 
   const domainName = email.split("@")[1]
   const domain = domainName ? findRememberedDomain(domainName) : undefined

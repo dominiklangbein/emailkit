@@ -7,12 +7,14 @@ import {
   isOutlookAuth,
   MAILGUN_CAPABILITIES,
   MailgunDriver,
+  OUTLOOK_APPLICATION_CAPABILITIES,
   OUTLOOK_CAPABILITIES,
   OutlookDriver,
   RESEND_CAPABILITIES,
   ResendDriver,
   type DriverCapabilities,
   type EmailDriverTuple,
+  type Mailbox,
   type OutlookWebhookAuthResolver,
 } from "emailkit"
 
@@ -62,6 +64,17 @@ const outlookProviderMailboxIdFromResource = (resource?: string) => {
   const match = resource?.match(/users\/([^/]+)/i)
   return match?.[1]
 }
+
+// Application mode has no connect flow and cannot list mailboxes without a
+// directory permission, so the mailboxes granted via Exchange RBAC come from env.
+export const configuredMailboxes = (emailDriver: string): Mailbox[] =>
+  emailDriver === "outlook-app"
+    ? listEnv("OUTLOOK_APP_MAILBOXES").map((email) => ({
+        id: email,
+        email,
+        status: "connected",
+      }))
+    : []
 
 export const emailkitPublicRoute = (emailDriver: string) =>
   `${publicBaseUrl()}/api/email/${encodeURIComponent(emailDriver)}`
@@ -247,6 +260,33 @@ const definitions: DriverDefinition[] = [
           : {}),
       })
     },
+  },
+  {
+    id: "outlook-app",
+    label: "Outlook (app)",
+    family: "outlook",
+    capabilities: OUTLOOK_APPLICATION_CAPABILITIES,
+    requiredEnv: [
+      "OUTLOOK_CLIENT_ID",
+      "OUTLOOK_CLIENT_SECRET",
+      "OUTLOOK_APP_TENANT",
+      "OUTLOOK_APP_MAILBOXES",
+    ],
+    optionalEnv: [
+      "OUTLOOK_WEBHOOK_CLIENT_STATE",
+      "PUBLIC_BASE_URL",
+      "APP_URL",
+      "TO_EMAIL_ADDRESS",
+    ],
+    create: () =>
+      OutlookDriver({
+        id: "outlook-app",
+        authMode: "application",
+        clientId: env("OUTLOOK_CLIENT_ID"),
+        clientSecret: env("OUTLOOK_CLIENT_SECRET"),
+        tenant: env("OUTLOOK_APP_TENANT"),
+        webhookClientState: env("OUTLOOK_WEBHOOK_CLIENT_STATE") || undefined,
+      }),
   },
 ]
 
