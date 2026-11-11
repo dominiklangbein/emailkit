@@ -555,7 +555,11 @@ const defaultWebhookClientState = (
   config: AnyOutlookDriverConfig,
 ): string =>
   `emailkit:${createHash("sha256")
-    .update(`${config.clientId}:${config.clientSecret}`)
+    .update(
+      `${config.clientId}:${config.clientSecret}${
+        config.authMode === "application" ? `:${config.tenant}` : ""
+      }`,
+    )
     .digest("hex")
     .slice(0, 32)}`;
 
@@ -896,12 +900,27 @@ const outlookProviderMetadata = (
   return outlook as OutlookAttachmentProviderMetadata;
 };
 
+// Graph ids are GUIDs and URL-safe base64. Excluding ".", "%" and "\" keeps URL
+// normalization from turning a segment such as ".." into a folder path.
+const SINGLE_MESSAGE_RESOURCE =
+  /^\/?(?:me|users\/[\w@-]+)\/messages\/[\w=-]+$/i;
+
 const notificationResourcePath = (
   notification: GraphChangeNotification,
 ): string | undefined => {
   const resource =
     notification.resourceData?.["@odata.id"] || notification.resource;
-  if (resource) return resource.replace(/^\/+/, "");
+  if (resource) {
+    if (!SINGLE_MESSAGE_RESOURCE.test(resource)) {
+      throw new EmailKitError(
+        "Invalid Microsoft Graph message resource URL",
+        PROVIDER,
+        "INVALID_WEBHOOK_RESOURCE",
+        400,
+      );
+    }
+    return resource.replace(/^\//, "");
+  }
   const messageId = notification.resourceData?.id;
   return messageId ? `me/messages/${encodeURIComponent(messageId)}` : undefined;
 };
@@ -934,23 +953,7 @@ const applyGraphMessageSelection = (url: URL): void => {
 };
 
 const graphMessageUrl = (graphBase: string, resourcePath: string): string => {
-  const base =
-    resourcePath.startsWith("http://") || resourcePath.startsWith("https://")
-      ? resourcePath
-      : `${graphBase}/${resourcePath}`;
-  const url = new URL(base);
-  const graphBaseUrl = new URL(`${graphBase}/`);
-  if (
-    url.origin !== graphBaseUrl.origin ||
-    !url.pathname.startsWith(graphBaseUrl.pathname)
-  ) {
-    throw new EmailKitError(
-      "Invalid Microsoft Graph message resource URL",
-      PROVIDER,
-      "INVALID_WEBHOOK_RESOURCE",
-      400,
-    );
-  }
+  const url = new URL(`${graphBase}/${resourcePath}`);
   applyGraphMessageSelection(url);
   return url.toString();
 };
@@ -1587,12 +1590,13 @@ export function OutlookDriver(
     );
     const events = webhookEvents(input.events);
     const url = resolveWebhookSetupUrl(input);
+    const { mailboxId, mailboxEmail } = mailboxProviderMetadata(input);
     const inboundSubscription = await createInboundSubscription(auth, {
       notificationUrl: url,
       events,
       provider: input.provider,
       ...(options ? { options } : {}),
-      mailbox: input.mailbox,
+      mailbox: { id: mailboxId, email: mailboxEmail },
     });
     const webhook = normalizeInboundSubscription(inboundSubscription, {
       driverId,
@@ -1612,6 +1616,7 @@ export function OutlookDriver(
   const resolveProviderFetchAuth = async (
     init?: ProviderFetchInit,
   ): Promise<OutlookMailboxAuth | undefined> => {
+    if (applicationAuthMode) return getApplicationAuth();
     const metadata = outlookProviderMetadata(init?.provider);
     if (metadata?.notification) {
       const resolved = await webhookAuthFromConfig(
@@ -1654,9 +1659,7 @@ export function OutlookDriver(
       if (resolved) return resolved;
     }
 
-    return applicationAuthMode
-      ? getApplicationAuth()
-      : staticWebhookAuthFromConfig(config);
+    return staticWebhookAuthFromConfig(config);
   };
 
   const oauthConnect = {
@@ -1880,7 +1883,9 @@ export function OutlookDriver(
         );
       }
 
-      const mailboxPath = graphMailboxPath(options?.mailbox);
+      const mailboxPath = graphMailboxPath(
+        options?.mailbox ?? { email: message.from.email },
+      );
       const auth = await resolveMailboxOperationAuth(
         "sendEmail",
         { auth: options?.auth, mailbox: options?.mailbox },
@@ -2439,6 +2444,13 @@ export function OutlookDriver(
         options?: EmailDriverOperationOptions,
       ): SyncStream {
         const attachmentProvider = mailboxProviderMetadata(input);
+        if (applicationAuthMode && !attachmentProvider.mailboxEmail) {
+          throw new EmailKitError(
+            "Outlook application sync requires the mailbox email to tell received mail from the mailbox's own sent mail",
+            PROVIDER,
+            "MISSING_MAILBOX",
+          );
+        }
         const resource = mailboxResource(
           config.inboundResource || DEFAULT_INBOUND_RESOURCE,
           {

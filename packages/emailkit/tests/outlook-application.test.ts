@@ -278,23 +278,45 @@ describe("OutlookDriver application auth", () => {
     );
   });
 
-  it("requires a mailbox before requesting a token", async () => {
+  it("requires a mailbox email to sync before requesting a token", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const driver = createAppDriver();
 
-    await expect(driver.sendEmail(message)).rejects.toMatchObject({
-      code: "MISSING_MAILBOX",
-    });
-    await expect(
+    for (const input of [
       // Deliberately invalid input: no mailbox, id or email.
-      drain(
-        driver.sync!.mailbox!({
-          since: new Date("2026-01-01"),
-        } as MailboxSyncInput),
-      ),
-    ).rejects.toMatchObject({ code: "MISSING_MAILBOX" });
+      {},
+      // An id alone cannot tell received mail from the mailbox's sent mail.
+      { mailbox: { id: "user_guid" } },
+    ]) {
+      await expect(
+        drain(
+          driver.sync!.mailbox!({
+            since: new Date("2026-01-01"),
+            ...input,
+          } as MailboxSyncInput),
+        ),
+      ).rejects.toMatchObject({ code: "MISSING_MAILBOX" });
+    }
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends from the from address when no mailbox is given", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(json({ id: "draft_1" }))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createAppDriver().sendEmail({
+      ...message,
+      from: { email: "sales+eu@example.com" },
+    });
+
+    expect(calls(fetchMock)[1]!.url).toBe(
+      `${GRAPH}/users/sales%2Beu%40example.com/messages`,
+    );
   });
 
   it("scopes configured resources to the addressed mailbox", async () => {
@@ -340,6 +362,63 @@ describe("OutlookDriver application auth", () => {
       "users/user_guid/messages",
       "users/other_guid/messages",
     ]);
+  });
+
+  it("accepts the same mailbox inputs for webhook setup as for sync", async () => {
+    const fetchMock = vi.fn(async (input: unknown) =>
+      String(input) === TOKEN_URL
+        ? tokenResponse()
+        : json({
+            id: "sub_1",
+            notificationUrl: WEBHOOK_URL,
+            expirationDateTime: "2026-12-01T00:00:00Z",
+          }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const driver = createAppDriver();
+    const base = { url: WEBHOOK_URL, events: ["inbound" as const] };
+
+    await driver.webhooks!.mailbox!.setup!({
+      ...base,
+      email: "support@contoso.com",
+    });
+    await driver.webhooks!.mailbox!.setup!({ ...base, mailboxId: "user_guid" });
+
+    const resources = calls(fetchMock)
+      .filter((call) => call.url === `${GRAPH}/subscriptions`)
+      .map((call) => JSON.parse(String(call.body)).resource);
+    expect(resources).toEqual([
+      "users/support%40contoso.com/messages",
+      "users/user_guid/messages",
+    ]);
+  });
+
+  it("derives a per-tenant default clientState in application mode", async () => {
+    const fetchMock = vi.fn(async (input: unknown) =>
+      String(input).endsWith("/token")
+        ? tokenResponse()
+        : json({
+            id: "sub_1",
+            notificationUrl: WEBHOOK_URL,
+            expirationDateTime: "2026-12-01T00:00:00Z",
+          }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const tenant of ["tenant_a", "tenant_b"]) {
+      await createAppDriver({ tenant }).webhooks!.mailbox!.setup!({
+        mailbox: MAILBOX,
+        url: WEBHOOK_URL,
+        events: ["inbound"],
+      });
+    }
+
+    const [a, b] = calls(fetchMock)
+      .filter((call) => call.url === `${GRAPH}/subscriptions`)
+      .map((call) => JSON.parse(String(call.body)).clientState);
+    expect(a).toMatch(/^emailkit:/);
+    expect(b).toMatch(/^emailkit:/);
+    expect(a).not.toBe(b);
   });
 
   it("syncs the addressed mailbox", async () => {
@@ -389,10 +468,12 @@ describe("OutlookDriver application auth", () => {
             subscriptionId: "sub_1",
             clientState: "state_123",
             changeType: "created",
-            resource: "Users/user_guid/Messages/msg_1",
+            resource:
+              "Users/11111111-2222-3333-4444-555555555555/Messages/AAMkAGRj-T7_KzowPTAAA=",
             resourceData: {
               "@odata.type": "#Microsoft.Graph.Message",
-              "@odata.id": "Users/user_guid/Messages/msg_1",
+              "@odata.id":
+                "Users/11111111-2222-3333-4444-555555555555/Messages/AAMkAGRj-T7_KzowPTAAA=",
               id: "msg_1",
             },
           },
@@ -402,13 +483,48 @@ describe("OutlookDriver application auth", () => {
 
     const hydrate = calls(fetchMock)[1]!;
     expect(
-      hydrate.url.startsWith(`${GRAPH}/Users/user_guid/Messages/msg_1?`),
+      hydrate.url.startsWith(
+        `${GRAPH}/Users/11111111-2222-3333-4444-555555555555/Messages/AAMkAGRj-T7_KzowPTAAA=?`,
+      ),
     ).toBe(true);
     expect(hydrate.authorization).toBe("Bearer app_token_1");
     expect(event).toMatchObject({
       type: "inbound",
       data: { messageId: "<msg_1@example.com>" },
     });
+  });
+
+  it.each([
+    "users/victim/messages",
+    "users/victim/messages/msg_1/attachments",
+    "users/victim/messages/msg_1?$select=body",
+    "users/victim/messages/msg_1#fragment",
+    "users/victim/messages/..",
+    "users/victim/messages/%2e%2e",
+    "users/victim/messages/msg_1\\..",
+    "https://attacker.example/users/victim/messages/msg_1",
+  ])("rejects non-message webhook resource %s", async (resource) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createAppDriver({ webhookClientState: "state_123" }).handleWebhook!({
+        method: "POST",
+        headers: {},
+        body: {
+          value: [
+            {
+              subscriptionId: "sub_1",
+              clientState: "state_123",
+              changeType: "created",
+              resource,
+              resourceData: { "@odata.type": "#Microsoft.Graph.Message" },
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_WEBHOOK_RESOURCE" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("uses the application token for providerFetch", async () => {
@@ -465,7 +581,11 @@ describe("OutlookDriver application auth", () => {
           notificationUrl: "https://app.example.com/api/email/outlook-app",
           expirationDateTime: "2026-12-01T00:00:00Z",
         });
-      if (url.startsWith(`${GRAPH}/Users/user_guid/Messages/msg_1?`))
+      if (
+        url.startsWith(
+          `${GRAPH}/Users/11111111-2222-3333-4444-555555555555/Messages/AAMkAGRj-T7_KzowPTAAA=?`,
+        )
+      )
         return json({
           id: "msg_1",
           internetMessageId: "<msg_1@example.com>",
@@ -522,7 +642,8 @@ describe("OutlookDriver application auth", () => {
             subscriptionId: "sub_1",
             clientState: "state_123",
             changeType: "created",
-            resource: "Users/user_guid/Messages/msg_1",
+            resource:
+              "Users/11111111-2222-3333-4444-555555555555/Messages/AAMkAGRj-T7_KzowPTAAA=",
             resourceData: { id: "msg_1" },
           },
         ],

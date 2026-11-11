@@ -17,6 +17,7 @@ import type {
   Mailbox,
   MailboxIdentity,
   MailboxSyncInput,
+  MailboxWebhookTarget,
   WebhookRequest,
 } from "../types";
 import { EmailKitError } from "../types";
@@ -184,7 +185,7 @@ export interface SyncMailboxProviderMetadata {
 }
 
 export const mailboxProviderMetadata = (
-  input: MailboxSyncInput,
+  input: MailboxWebhookTarget,
 ): SyncMailboxProviderMetadata => {
   const mailbox =
     input.mailbox &&
