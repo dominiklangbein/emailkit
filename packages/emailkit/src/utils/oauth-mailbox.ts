@@ -355,8 +355,9 @@ export const createOAuthMailboxKit = <TAuth extends OAuthMailboxAuth>({
   const fetchToken = async (
     form: URLSearchParams,
     signal?: AbortSignal,
+    endpoint: string = tokenEndpoint,
   ): Promise<OAuthTokenResponse> => {
-    const response = await fetch(tokenEndpoint, {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form,
@@ -474,9 +475,13 @@ export const createOAuthMailboxKit = <TAuth extends OAuthMailboxAuth>({
   /**
    * App-only (client-credentials) token getter. The token is cached and
    * concurrent callers share one request, so the request is bounded by its own
-   * timeout instead of any single caller's signal.
+   * timeout instead of any single caller's signal. `endpoint` overrides the
+   * token endpoint, e.g. to request a token for another Microsoft tenant.
    */
-  const clientCredentialsAuth = (scope: string): (() => Promise<TAuth>) => {
+  const clientCredentialsAuth = (
+    scope: string,
+    endpoint: string = tokenEndpoint,
+  ): (() => Promise<TAuth>) => {
     const form = new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
@@ -495,6 +500,7 @@ export const createOAuthMailboxKit = <TAuth extends OAuthMailboxAuth>({
       inflight ??= fetchToken(
         form,
         AbortSignal.timeout(CLIENT_CREDENTIALS_TIMEOUT_MS),
+        endpoint,
       )
         .then((token) => (cached = toAuth(token)))
         .finally(() => {

@@ -8,7 +8,11 @@ import {
   type GmailMailboxAuth,
   type OutlookMailboxAuth,
 } from "../src";
-import type { WebhookLifecycleTarget, WebhookScope } from "../src";
+import type {
+  OutlookApplicationAuth,
+  WebhookLifecycleTarget,
+  WebhookScope,
+} from "../src";
 
 declare const plainDriver: EmailDriver<{}, "plain-driver">;
 declare const fetchDriver: EmailDriver<{ providerFetch: true }, "fetch-driver"
@@ -243,13 +247,13 @@ const outlookAppDriver = OutlookDriver({
 });
 const appThreading: true = outlookAppDriver.capabilities.nativeReplyThreading;
 const appConnect: false = outlookAppDriver.capabilities.mailboxConnect;
-const appSenderAuth: false = outlookAppDriver.capabilities.senderAuth;
+const appSenderAuth: true = outlookAppDriver.capabilities.senderAuth;
 const appDriverId: "outlook-app" = outlookAppDriver.id;
 void appThreading;
 void appConnect;
 void appSenderAuth;
 void appDriverId;
-// @ts-expect-error application mode requires a tenant.
+// Multi-tenant application mode: the tenant comes from each mailbox's auth.
 OutlookDriver({
   clientId: "client_123",
   clientSecret: "secret_123",
@@ -282,22 +286,24 @@ outlookAppClient.sendEmail({
   text: "Hi",
   sender: {
     emailDriver: "outlook-app" as const,
-    // @ts-expect-error application mode does not take per-send auth.
-    auth: { accessToken: "access_123" },
+    auth: { tenantId: "tenant_123" } satisfies OutlookApplicationAuth,
   },
 });
 void outlookAppClient.mailboxes.webhooks.setup({
   emailDriver: "outlook-app",
+  auth: { tenantId: "tenant_123" },
   mailbox: { id: "user_guid", email: "support@example.com" },
   events: ["inbound"],
 });
 void outlookAppClient.mailboxes.webhooks.refresh({
   emailDriver: "outlook-app",
+  auth: { tenantId: "tenant_123" },
   providerId: "sub_123",
   mailbox: { id: "user_guid", email: "support@example.com" },
 });
 void outlookAppClient.mailboxes.sync({
   emailDriver: "outlook-app",
+  auth: { tenantId: "tenant_123" },
   mailbox: { id: "user_guid", email: "support@example.com" },
   since: new Date(),
 });

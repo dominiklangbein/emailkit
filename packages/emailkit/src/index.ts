@@ -286,9 +286,11 @@ export {
   OUTLOOK_CAPABILITIES,
   OUTLOOK_DRAFT_CAPABILITIES,
   OutlookDriver,
+  isOutlookApplicationAuth,
   isOutlookAuth,
 } from "./drivers/outlook";
 export type {
+  OutlookApplicationAuth,
   OutlookApplicationCapabilitiesForSendMode,
   OutlookApplicationDriverConfig,
   OutlookAuthMode,

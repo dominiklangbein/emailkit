@@ -191,7 +191,9 @@ export interface OutlookDriverConfig<
  * (https://learn.microsoft.com/exchange/permissions-exo/application-rbac).
  * The driver gets its own client-credentials token and addresses each mailbox
  * as Graph `users/{id}`, so operations take `mailbox` (Graph user id or UPN in
- * `id`, or `email`) and no per-mailbox auth. Exchange RBAC decides which
+ * `id`, or `email`). Per-mailbox auth is optional and only carries the tenant
+ * ({@link OutlookApplicationAuth}), so one driver can serve several customer
+ * tenants. Exchange RBAC decides which
  * mailboxes the app can reach; others fail with Graph 403. `inboundResource`
  * is written relative to `me`, which is replaced with the addressed mailbox.
  */
@@ -200,8 +202,12 @@ export interface OutlookApplicationDriverConfig<
   TSendEmailMode extends OutlookSendEmailMode = OutlookSendEmailMode,
 > extends OutlookDriverBaseConfig<TId, TSendEmailMode> {
   authMode: "application";
-  /** Tenant id or verified domain. "common", "organizations" and "consumers" are rejected. */
-  tenant: string;
+  /**
+   * Default tenant id or verified domain, used when an operation's auth has no
+   * `tenantId` and a webhook notification has none. Optional for multi-tenant
+   * apps. "common", "organizations" and "consumers" are rejected.
+   */
+  tenant?: string;
   scopes?: never;
   autoSubscribeInbound?: never;
   webhookAuth?: never;
@@ -211,6 +217,14 @@ export interface OutlookApplicationDriverConfig<
 export type OutlookAuthMode = "delegated" | "application";
 
 export type OutlookMailboxAuth = OAuthMailboxAuth;
+
+/**
+ * Mailbox auth for application mode: the Microsoft tenant the mailbox lives
+ * in. Store it like any other mailbox auth and pass it as `auth`/`sender.auth`.
+ */
+export interface OutlookApplicationAuth {
+  tenantId: string;
+}
 
 export type OutlookSendEmailMode = "sendMail" | "draft";
 
@@ -319,12 +333,12 @@ export type OutlookCapabilitiesForSendMode<
 
 /**
  * Capabilities of an application-mode Outlook driver. The driver
- * authenticates as the app, so there is no OAuth mailbox connect, no
- * per-send `sender.auth` and no EmailKit secret for signed OAuth state.
+ * authenticates as the app, so there is no OAuth mailbox connect and no
+ * EmailKit secret for signed OAuth state. `sender.auth` only carries the
+ * mailbox's tenant ({@link OutlookApplicationAuth}).
  */
 export const OUTLOOK_APPLICATION_CAPABILITIES = {
   ...OUTLOOK_CAPABILITIES,
-  senderAuth: false,
   requiresSecret: false,
   mailboxConnect: false,
   publicRoutes: {
@@ -360,6 +374,9 @@ const OUTLOOK_CAPABILITIES_BY_MODE = {
 >;
 
 const SHARED_TENANT_SEGMENTS = /^(common|organizations|consumers)$/i;
+
+const isApplicationTenant = (tenant: string): boolean =>
+  tenant.trim() !== "" && !SHARED_TENANT_SEGMENTS.test(tenant.trim());
 
 type AnyOutlookDriverConfig =
   | OutlookDriverConfig<string>
@@ -494,6 +511,8 @@ interface GraphAttachment {
 
 interface OutlookAttachmentProviderMetadata {
   notification?: GraphChangeNotification;
+  /** Application mode: tenant of the mailbox the message belongs to. */
+  tenantId?: string;
   query?: Record<string, string>;
   mailboxEmail?: string;
   mailboxId?: string;
@@ -557,7 +576,12 @@ const defaultWebhookClientState = (
   `emailkit:${createHash("sha256")
     .update(
       `${config.clientId}:${config.clientSecret}${
-        config.authMode === "application" ? `:${config.tenant}` : ""
+        // Without a default tenant one driver serves all tenants, so the
+        // state cannot vary per tenant. With one, the hash stays unchanged
+        // so live subscriptions keep validating.
+        config.authMode === "application"
+          ? `:${config.tenant ?? "application"}`
+          : ""
       }`,
     )
     .digest("hex")
@@ -645,6 +669,13 @@ const escapeODataStringLiteral = (value: string): string =>
 
 export const isOutlookAuth = (auth: unknown): auth is OutlookMailboxAuth =>
   isOAuthMailboxAuth(auth);
+
+export const isOutlookApplicationAuth = (
+  auth: unknown,
+): auth is OutlookApplicationAuth =>
+  typeof auth === "object" &&
+  auth !== null &&
+  nonEmptyString((auth as { tenantId?: unknown }).tenantId) !== undefined;
 
 const configuredWebhookAuth = async (
   config: AnyOutlookDriverConfig,
@@ -1128,7 +1159,8 @@ export function OutlookDriver(
   const applicationAuthMode = authMode === "application";
   if (
     applicationAuthMode &&
-    (!config.tenant || SHARED_TENANT_SEGMENTS.test(config.tenant))
+    config.tenant !== undefined &&
+    !isApplicationTenant(config.tenant)
   ) {
     throw new EmailKitError(
       'Outlook authMode "application" requires a concrete tenant id or domain, not "common", "organizations" or "consumers"',
@@ -1187,16 +1219,50 @@ export function OutlookDriver(
   });
 
   // Application mode authenticates as the app: every mailbox and webhook
-  // operation uses the cached client-credentials token instead of user auth.
-  const getApplicationAuth = clientCredentialsAuth(
-    `${new URL(graphBase).origin}/.default`,
-  );
+  // operation uses a cached client-credentials token for the mailbox's tenant
+  // instead of user auth.
+  // shortcut: one cached token getter per tenant, never evicted; fine for a
+  // bounded set of customer tenants, add eviction if tenants become unbounded.
+  const applicationTokenGetters = new Map<
+    string,
+    () => Promise<OutlookMailboxAuth>
+  >();
+  const getApplicationAuth = (
+    tenantId?: string,
+  ): Promise<OutlookMailboxAuth> => {
+    const tenant = (tenantId ?? config.tenant)?.trim();
+    if (!tenant || !isApplicationTenant(tenant)) {
+      throw new EmailKitError(
+        'Outlook application auth requires a concrete tenant: pass auth { tenantId } or set the driver tenant (not "common", "organizations" or "consumers")',
+        PROVIDER,
+        "MISSING_TENANT",
+      );
+    }
+    const key = tenant.toLowerCase();
+    let getter = applicationTokenGetters.get(key);
+    if (!getter) {
+      getter = clientCredentialsAuth(
+        `${new URL(graphBase).origin}/.default`,
+        `${authBase}/${encodeURIComponent(tenant)}/oauth2/v2.0/token`,
+      );
+      applicationTokenGetters.set(key, getter);
+    }
+    return getter();
+  };
+  const applicationTenantFrom = (...auths: unknown[]): string | undefined =>
+    auths.find(isOutlookApplicationAuth)?.tenantId;
   const resolveMailboxOperationAuth: typeof resolveDelegatedMailboxAuth =
     applicationAuthMode
-      ? () => getApplicationAuth()
+      ? async (_operation, input, options) =>
+          getApplicationAuth(applicationTenantFrom(input.auth, options?.auth))
       : resolveDelegatedMailboxAuth;
+  // Notifications reach this only after their clientState was verified, and
+  // a token for another tenant cannot read the message anyway.
   const webhookAuthFromConfig: typeof configuredWebhookAuth =
-    applicationAuthMode ? () => getApplicationAuth() : configuredWebhookAuth;
+    applicationAuthMode
+      ? async (_config, _request, notification) =>
+          getApplicationAuth(nonEmptyString(notification.tenantId))
+      : configuredWebhookAuth;
 
   const graphMailboxPath = (mailbox?: {
     id?: string;
@@ -1616,8 +1682,13 @@ export function OutlookDriver(
   const resolveProviderFetchAuth = async (
     init?: ProviderFetchInit,
   ): Promise<OutlookMailboxAuth | undefined> => {
-    if (applicationAuthMode) return getApplicationAuth();
     const metadata = outlookProviderMetadata(init?.provider);
+    if (applicationAuthMode) {
+      return getApplicationAuth(
+        nonEmptyString(metadata?.tenantId) ??
+          nonEmptyString(metadata?.notification?.tenantId),
+      );
+    }
     if (metadata?.notification) {
       const resolved = await webhookAuthFromConfig(
         config,
@@ -2464,6 +2535,13 @@ export function OutlookDriver(
           options,
           input.signal,
         );
+        // Lets providerFetch pick the right tenant for synced attachments.
+        const tenantId = applicationAuthMode
+          ? applicationTenantFrom(input.auth, options?.auth)
+          : undefined;
+        const messageProvider = tenantId
+          ? { ...attachmentProvider, tenantId }
+          : attachmentProvider;
         const until = input.until || new Date();
         const mailboxEmails = outlookMailboxEmails(input);
         const listUrl = new URL(`${graphBase}/${resource}`);
@@ -2514,7 +2592,7 @@ export function OutlookDriver(
                   message.id || "",
                 )}`,
                 undefined,
-                attachmentProvider,
+                messageProvider,
               ),
             };
           }
