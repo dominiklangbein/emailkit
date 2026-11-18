@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -72,7 +73,7 @@ const drain = async (stream: SyncStream) => {
 };
 
 describe("OutlookDriver application auth", () => {
-  it.each([undefined, "common", "Organizations", "consumers"])(
+  it.each(["", "common", "Organizations", "consumers"])(
     "rejects application mode without a concrete tenant (%s)",
     (tenant) => {
       expect(() =>
@@ -86,12 +87,12 @@ describe("OutlookDriver application auth", () => {
     },
   );
 
-  it("advertises no mailbox connect, sender auth or EmailKit secret", () => {
+  it("advertises no mailbox connect or EmailKit secret", () => {
     const driver = createAppDriver();
 
     expect(driver.capabilities).toMatchObject({
       mailboxConnect: false,
-      senderAuth: false,
+      senderAuth: true,
       senderMailbox: true,
       requiresSecret: false,
       nativeReplyThreading: true,
@@ -667,5 +668,282 @@ describe("OutlookDriver application auth", () => {
     expect(
       calls(fetchMock).filter((call) => call.url === TOKEN_URL),
     ).toHaveLength(1);
+  });
+});
+
+describe("OutlookDriver multi-tenant application auth", () => {
+  const tokenUrl = (tenant: string) =>
+    `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`;
+  const tokenFor = (url: string) =>
+    json({
+      access_token: `token_${new URL(url).pathname.split("/")[1]}`,
+      expires_in: 3600,
+    });
+  const createMultiTenantDriver = (
+    overrides: Partial<
+      OutlookApplicationDriverConfig<"outlook", "sendMail">
+    > = {},
+  ) =>
+    OutlookDriver({
+      clientId: "client_123",
+      clientSecret: "secret_123",
+      authMode: "application",
+      ...overrides,
+    });
+  const graphMessage = {
+    id: "msg_1",
+    internetMessageId: "<msg_1@example.com>",
+    subject: "Need help",
+    body: { contentType: "text", content: "Hello" },
+    from: { emailAddress: { address: "customer@example.com" } },
+    toRecipients: [{ emailAddress: { address: "support@example.com" } }],
+    receivedDateTime: "2026-05-21T10:30:00Z",
+  };
+
+  it("requests and caches one token per tenant from auth.tenantId", async () => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      return url.endsWith("/token")
+        ? tokenFor(url)
+        : new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const driver = createMultiTenantDriver({ tenant: "tenant_default" });
+
+    for (const tenantId of ["tenant_a", "Tenant_A", "tenant_b"]) {
+      await driver.sendEmail(message, { mailbox: MAILBOX, auth: { tenantId } });
+    }
+    await driver.sendEmail(message, { mailbox: MAILBOX });
+
+    const all = calls(fetchMock);
+    expect(
+      all.filter((call) => call.url.endsWith("/token")).map((c) => c.url),
+    ).toEqual([
+      tokenUrl("tenant_a"),
+      tokenUrl("tenant_b"),
+      tokenUrl("tenant_default"),
+    ]);
+    expect(
+      all
+        .filter((call) => call.url === `${GRAPH}/users/user_guid/sendMail`)
+        .map((call) => call.authorization),
+    ).toEqual([
+      "Bearer token_tenant_a",
+      "Bearer token_tenant_a",
+      "Bearer token_tenant_b",
+      "Bearer token_tenant_default",
+    ]);
+  });
+
+  it("passes sender.auth through the EmailKit client", async () => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      return url.endsWith("/token")
+        ? tokenFor(url)
+        : new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const emailkit = EmailKit({ emailDrivers: [createMultiTenantDriver()] });
+
+    await emailkit.sendEmail({
+      ...message,
+      sender: {
+        emailDriver: "outlook",
+        mailbox: MAILBOX,
+        auth: { tenantId: "tenant_a" },
+      },
+    });
+
+    const [token, send] = calls(fetchMock);
+    expect(token!.url).toBe(tokenUrl("tenant_a"));
+    expect(send).toMatchObject({
+      url: `${GRAPH}/users/user_guid/sendMail`,
+      authorization: "Bearer token_tenant_a",
+    });
+  });
+
+  it.each([
+    ["no tenant anywhere", undefined],
+    ["a shared tenant in auth", { tenantId: "common" }],
+  ])("rejects %s before requesting a token", async (_label, auth) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createMultiTenantDriver().sendEmail(message, { mailbox: MAILBOX, auth }),
+    ).rejects.toMatchObject({ code: "MISSING_TENANT" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses auth.tenantId for webhook setup and sync", async () => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/token")) return tokenFor(url);
+      if (url === `${GRAPH}/subscriptions`)
+        return json({
+          id: "sub_1",
+          notificationUrl: WEBHOOK_URL,
+          expirationDateTime: "2026-12-01T00:00:00Z",
+        });
+      return json({
+        value: [
+          { ...graphMessage, attachments: [{ id: "att_1", name: "a.pdf" }] },
+        ],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const driver = createMultiTenantDriver();
+
+    await driver.webhooks!.mailbox!.setup!({
+      mailbox: MAILBOX,
+      url: WEBHOOK_URL,
+      events: ["inbound"],
+      auth: { tenantId: "tenant_a" },
+    });
+    const events = await drain(
+      driver.sync!.mailbox!({
+        mailbox: MAILBOX,
+        since: new Date("2026-01-01"),
+        auth: { tenantId: "tenant_b" },
+      }),
+    );
+
+    const graphCalls = calls(fetchMock).filter(
+      (call) => !call.url.endsWith("/token"),
+    );
+    expect(graphCalls.map((call) => call.authorization)).toEqual([
+      "Bearer token_tenant_a",
+      "Bearer token_tenant_b",
+    ]);
+    expect(events[0]).toMatchObject({
+      data: {
+        attachments: [{ provider: { outlook: { tenantId: "tenant_b" } } }],
+      },
+    });
+  });
+
+  it("hydrates inbound mail with the notification's tenant", async () => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      return url.endsWith("/token") ? tokenFor(url) : json(graphMessage);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createMultiTenantDriver({
+      tenant: "tenant_default",
+      webhookClientState: "state_123",
+    }).handleWebhook!({
+      method: "POST",
+      headers: {},
+      body: {
+        value: [
+          {
+            subscriptionId: "sub_1",
+            clientState: "state_123",
+            changeType: "created",
+            tenantId: "tenant_b",
+            resource: "Users/user_guid/Messages/msg_1",
+            resourceData: { id: "msg_1" },
+          },
+        ],
+      },
+    });
+
+    const [token, hydrate] = calls(fetchMock);
+    expect(token!.url).toBe(tokenUrl("tenant_b"));
+    expect(hydrate!.authorization).toBe("Bearer token_tenant_b");
+  });
+
+  it("renews reauthorizationRequired subscriptions with the notification's tenant", async () => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      return url.endsWith("/token")
+        ? tokenFor(url)
+        : json({
+            id: "sub_1",
+            notificationUrl: WEBHOOK_URL,
+            expirationDateTime: "2026-12-01T00:00:00Z",
+          });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createMultiTenantDriver({
+      webhookClientState: "state_123",
+    }).handleWebhook!({
+      method: "POST",
+      headers: {},
+      body: {
+        value: [
+          {
+            subscriptionId: "sub_1",
+            clientState: "state_123",
+            tenantId: "tenant_b",
+            lifecycleEvent: "reauthorizationRequired",
+          },
+        ],
+      },
+    });
+
+    const [token, renew] = calls(fetchMock);
+    expect(token!.url).toBe(tokenUrl("tenant_b"));
+    expect(renew).toMatchObject({
+      url: `${GRAPH}/subscriptions/sub_1`,
+      method: "PATCH",
+      authorization: "Bearer token_tenant_b",
+    });
+  });
+
+  it("picks the providerFetch tenant from provider metadata", async () => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      return url.endsWith("/token") ? tokenFor(url) : json({ value: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const driver = createMultiTenantDriver();
+
+    await driver.providerFetch!("users/user_guid/mailFolders", {
+      provider: { outlook: { tenantId: "tenant_a" } },
+    });
+    await driver.providerFetch!("users/user_guid/mailFolders", {
+      provider: { outlook: { notification: { tenantId: "tenant_b" } } },
+    });
+
+    expect(
+      calls(fetchMock)
+        .filter((call) => !call.url.endsWith("/token"))
+        .map((call) => call.authorization),
+    ).toEqual(["Bearer token_tenant_a", "Bearer token_tenant_b"]);
+  });
+
+  it("keeps the default clientState of a single-tenant driver", async () => {
+    const fetchMock = vi.fn(async (input: unknown) =>
+      String(input).endsWith("/token")
+        ? tokenResponse()
+        : json({
+            id: "sub_1",
+            notificationUrl: WEBHOOK_URL,
+            expirationDateTime: "2026-12-01T00:00:00Z",
+          }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const subscribe = async (driver: ReturnType<typeof createAppDriver>) => {
+      await driver.webhooks!.mailbox!.setup!({
+        mailbox: MAILBOX,
+        url: WEBHOOK_URL,
+        events: ["inbound"],
+        auth: { tenantId: "tenant_123" },
+      });
+      return JSON.parse(String(calls(fetchMock).at(-1)!.body)).clientState;
+    };
+    const hash = (value: string) =>
+      `emailkit:${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+
+    // Same value as before tenant became optional, so live subscriptions keep validating.
+    expect(await subscribe(createAppDriver())).toBe(
+      hash("client_123:secret_123:tenant_123"),
+    );
+    expect(await subscribe(createAppDriver({ tenant: undefined }))).toBe(
+      hash("client_123:secret_123:application"),
+    );
   });
 });
