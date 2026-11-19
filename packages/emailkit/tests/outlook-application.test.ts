@@ -775,6 +775,23 @@ describe("OutlookDriver multi-tenant application auth", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["a misspelled tenant field", { tenant_id: "tenant_b" }],
+    ["a delegated token", { accessToken: "access_123" }],
+  ])(
+    "rejects %s instead of falling back to the default tenant",
+    async (_label, auth) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const driver = createMultiTenantDriver({ tenant: "tenant_default" });
+
+      await expect(
+        driver.sendEmail(message, { mailbox: MAILBOX, auth }),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses auth.tenantId for webhook setup and sync", async () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
