@@ -422,7 +422,7 @@ await emailkit.mailboxes.webhooks.refresh({ emailDriver: "outlook-app", provider
 await emailkit.mailboxes.sync({ emailDriver: "outlook-app", mailbox, auth, since });
 ```
 
-The driver requests and caches one app token per tenant. The tenant comes from `auth.tenantId`, then from the `tenantId` of an incoming Graph notification (inbound mail and lifecycle renewal), then from the driver's `tenant`. With none of these, or with `"common"`, `"organizations"` or `"consumers"`, the operation fails with `MISSING_TENANT`. `providerFetch` takes the tenant from `provider.outlook.tenantId` or `provider.outlook.notification.tenantId`, which inbound and synced attachments already carry.
+The driver requests and caches one app token per tenant. The tenant comes from `auth.tenantId`, then from the `tenantId` of an incoming Graph notification (inbound mail and lifecycle renewal), then from the driver's `tenant`. With none of these, or with `"common"`, `"organizations"` or `"consumers"`, the operation fails with `MISSING_TENANT`. An `auth` of any other shape than `{ tenantId }` fails with `INVALID_INPUT`. `providerFetch` takes the tenant from `provider.outlook.tenantId` or `provider.outlook.notification.tenantId`, which inbound and synced attachments already carry.
 
 Set up the app registration and each customer tenant like this:
 

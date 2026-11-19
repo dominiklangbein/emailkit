@@ -570,9 +570,7 @@ const resolveSendEmailMode = (
   );
 };
 
-const defaultWebhookClientState = (
-  config: AnyOutlookDriverConfig,
-): string =>
+const defaultWebhookClientState = (config: AnyOutlookDriverConfig): string =>
   `emailkit:${createHash("sha256")
     .update(
       `${config.clientId}:${config.clientSecret}${
@@ -599,9 +597,8 @@ const webhookClientStates = (config: AnyOutlookDriverConfig): string[] => {
 const subscriptionClientState = (config: AnyOutlookDriverConfig): string =>
   webhookClientStates(config)[0] || defaultWebhookClientState(config);
 
-const autoRenewOnLifecycleEnabled = (
-  config: AnyOutlookDriverConfig,
-): boolean => config.autoRenewOnLifecycle !== false;
+const autoRenewOnLifecycleEnabled = (config: AnyOutlookDriverConfig): boolean =>
+  config.autoRenewOnLifecycle !== false;
 
 const addressToRecipient = (address: EmailAddress): GraphRecipient => ({
   emailAddress: {
@@ -1249,12 +1246,27 @@ export function OutlookDriver(
     }
     return getter();
   };
-  const applicationTenantFrom = (...auths: unknown[]): string | undefined =>
-    auths.find(isOutlookApplicationAuth)?.tenantId;
+  // A wrong auth shape must fail here: falling back to the default tenant
+  // would turn it into a misleading Graph 404 for the customer mailbox.
+  const applicationTenantFrom = (
+    input: { auth?: unknown },
+    options?: { auth?: unknown },
+  ): string | undefined => {
+    const auth = input.auth ?? options?.auth;
+    if (auth === null) return undefined;
+    if (!isOutlookApplicationAuth(auth)) {
+      throw new EmailKitError(
+        "Outlook application auth must be { tenantId: string }",
+        PROVIDER,
+        "INVALID_INPUT",
+      );
+    }
+    return auth.tenantId;
+  };
   const resolveMailboxOperationAuth: typeof resolveDelegatedMailboxAuth =
     applicationAuthMode
       ? async (_operation, input, options) =>
-          getApplicationAuth(applicationTenantFrom(input.auth, options?.auth))
+          getApplicationAuth(applicationTenantFrom(input, options))
       : resolveDelegatedMailboxAuth;
   // Notifications reach this only after their clientState was verified, and
   // a token for another tenant cannot read the message anyway.
@@ -1348,13 +1360,16 @@ export function OutlookDriver(
     draftId: string,
   ): Promise<void> => {
     try {
-      await fetch(`${graphBase}/${mailboxPath}/messages/${encodeURIComponent(draftId)}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: authorization,
-          Prefer: IMMUTABLE_ID_PREFER_HEADER,
+      await fetch(
+        `${graphBase}/${mailboxPath}/messages/${encodeURIComponent(draftId)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: authorization,
+            Prefer: IMMUTABLE_ID_PREFER_HEADER,
+          },
         },
-      });
+      );
     } catch {
       // Best-effort cleanup; the caller rethrows the original send error.
     }
@@ -1714,14 +1729,14 @@ export function OutlookDriver(
         {
           resource: metadata.mailboxId
             ? `users/${encodeURIComponent(metadata.mailboxId)}/messages/${
-                metadata.messageId
-                  ? encodeURIComponent(metadata.messageId)
-                  : ""
+                metadata.messageId ? encodeURIComponent(metadata.messageId) : ""
               }`
             : metadata.messageId
               ? `me/messages/${encodeURIComponent(metadata.messageId)}`
               : undefined,
-          resourceData: metadata.messageId ? { id: metadata.messageId } : undefined,
+          resourceData: metadata.messageId
+            ? { id: metadata.messageId }
+            : undefined,
           mailboxEmail: metadata.mailboxEmail,
           mailboxId: metadata.mailboxId,
           messageId: metadata.messageId,
@@ -2319,10 +2334,7 @@ export function OutlookDriver(
       } = init ?? {};
       const headers = new Headers(initHeaders);
       if (!headers.has("Authorization")) {
-        headers.set(
-          "Authorization",
-          authorizationHeader(auth),
-        );
+        headers.set("Authorization", authorizationHeader(auth));
       }
 
       return fetch(resolveGraphUrl(graphBase, path, init), {
@@ -2537,7 +2549,7 @@ export function OutlookDriver(
         );
         // Lets providerFetch pick the right tenant for synced attachments.
         const tenantId = applicationAuthMode
-          ? applicationTenantFrom(input.auth, options?.auth)
+          ? applicationTenantFrom(input, options)
           : undefined;
         const messageProvider = tenantId
           ? { ...attachmentProvider, tenantId }
@@ -2565,10 +2577,7 @@ export function OutlookDriver(
           const body = await readJsonResponse(response);
           if (!response.ok) {
             throw new EmailKitError(
-              oauthErrorMessage(
-                body,
-                "Microsoft Graph message listing failed",
-              ),
+              oauthErrorMessage(body, "Microsoft Graph message listing failed"),
               PROVIDER,
               undefined,
               response.status,
