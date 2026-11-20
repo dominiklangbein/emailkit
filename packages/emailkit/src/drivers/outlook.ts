@@ -1253,7 +1253,7 @@ export function OutlookDriver(
     options?: { auth?: unknown },
   ): string | undefined => {
     const auth = input.auth ?? options?.auth;
-    if (auth === null) return undefined;
+    if (auth === undefined) return undefined;
     if (!isOutlookApplicationAuth(auth)) {
       throw new EmailKitError(
         "Outlook application auth must be { tenantId: string }",
