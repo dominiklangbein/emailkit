@@ -1,6 +1,12 @@
 "use client"
 
-import { ChevronDown, ChevronRight, Loader2, SendHorizontal, Settings2 } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  SendHorizontal,
+  Settings2,
+} from "lucide-react"
 import { useState, type ReactNode } from "react"
 import { toast } from "sonner"
 
@@ -11,7 +17,11 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { RichEditor } from "./rich-editor"
-import type { SandboxDriverInfo, SandboxSnapshot, SendSandboxEmailInput } from "../sandbox/types"
+import type {
+  SandboxDriverInfo,
+  SandboxSnapshot,
+  SendSandboxEmailInput,
+} from "../sandbox/types"
 
 type Draft = {
   fromEmail: string
@@ -33,6 +43,7 @@ type Draft = {
   templateData: string
   idempotencyKey: string
   tenantId: string
+  outlookTenant: string
   tags: string
   metadata: string
   headers: string
@@ -67,6 +78,7 @@ const defaultDraft = (driver: SandboxDriverInfo): Draft => ({
   templateData: "",
   idempotencyKey: "",
   tenantId: "",
+  outlookTenant: "",
   tags: "",
   metadata: "",
   headers: "",
@@ -86,9 +98,13 @@ export function ComposePanel({
   const caps = driver.capabilities
   const supportsTrackingOpens = caps.sendTracking?.opens === true
   const supportsTrackingClicks = caps.sendTracking?.clicks === true
+  const isOutlookApp = driver.id === "outlook-app"
 
   const update = <K extends keyof Draft>(key: K, value: Draft[K]) =>
-    setDrafts((current) => ({ ...current, [driver.id]: { ...draft, [key]: value } }))
+    setDrafts((current) => ({
+      ...current,
+      [driver.id]: { ...draft, [key]: value },
+    }))
 
   const csv = (value: string) =>
     value
@@ -121,14 +137,27 @@ export function ComposePanel({
         html: draft.bodyMode === "text" ? undefined : draft.html,
         sendAt: caps.scheduling && draft.sendAt ? draft.sendAt : undefined,
         templateId: caps.templates ? draft.templateId || undefined : undefined,
-        templateData: caps.templates ? parseJson(draft.templateData, "Template data") : undefined,
+        templateData: caps.templates
+          ? parseJson(draft.templateData, "Template data")
+          : undefined,
         track,
-        unsubscribe: caps.unsubscribe && draft.unsubscribeGlobal ? { global: true } : undefined,
-        idempotencyKey: caps.sendIdempotency ? draft.idempotencyKey || undefined : undefined,
+        unsubscribe:
+          caps.unsubscribe && draft.unsubscribeGlobal
+            ? { global: true }
+            : undefined,
+        idempotencyKey: caps.sendIdempotency
+          ? draft.idempotencyKey || undefined
+          : undefined,
         tenantId: caps.tenantRouting ? draft.tenantId || undefined : undefined,
+        outlookTenant: isOutlookApp
+          ? draft.outlookTenant.trim() || undefined
+          : undefined,
         tags: csv(draft.tags),
         metadata: parseJson<Record<string, string>>(draft.metadata, "Metadata"),
-        headers: parseJson<Record<string, string>>(draft.headers, "Custom headers"),
+        headers: parseJson<Record<string, string>>(
+          draft.headers,
+          "Custom headers"
+        ),
       }
 
       const response = await fetch("/api/sandbox/send", {
@@ -168,6 +197,17 @@ export function ComposePanel({
         </Field>
       </div>
 
+      {isOutlookApp && (
+        <Field label="Tenant">
+          <Input
+            value={draft.outlookTenant}
+            onChange={(event) => update("outlookTenant", event.target.value)}
+            placeholder="contoso.onmicrosoft.com or tenant id (optional)"
+            className="h-7 text-xs"
+          />
+        </Field>
+      )}
+
       <Field label="To">
         <Input
           value={draft.toEmail}
@@ -206,7 +246,9 @@ export function ComposePanel({
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
-          <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Body</label>
+          <label className="text-[10px] tracking-wider text-muted-foreground uppercase">
+            Body
+          </label>
           <SlidingPills
             value={draft.bodyMode}
             onChange={(mode) => update("bodyMode", mode)}
@@ -218,7 +260,10 @@ export function ComposePanel({
           />
         </div>
         {draft.bodyMode === "visual" && (
-          <RichEditor value={draft.html} onChange={(value) => update("html", value)} />
+          <RichEditor
+            value={draft.html}
+            onChange={(value) => update("html", value)}
+          />
         )}
         {draft.bodyMode === "html" && (
           <Textarea
@@ -242,11 +287,15 @@ export function ComposePanel({
 
       <button
         onClick={() => setOptionsOpen((current) => !current)}
-        className="flex items-center gap-1.5 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+        className="flex items-center gap-1.5 pt-1 text-[10px] font-medium tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground"
       >
         <Settings2 className="size-3" />
         Advanced
-        {optionsOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+        {optionsOpen ? (
+          <ChevronDown className="size-3" />
+        ) : (
+          <ChevronRight className="size-3" />
+        )}
       </button>
 
       {optionsOpen && (
@@ -262,7 +311,9 @@ export function ComposePanel({
             <Field label="In-Reply-To">
               <Input
                 value={draft.inReplyToMessageId}
-                onChange={(event) => update("inReplyToMessageId", event.target.value)}
+                onChange={(event) =>
+                  update("inReplyToMessageId", event.target.value)
+                }
                 placeholder="<msg-id@provider>"
                 className="h-7 text-xs"
               />
@@ -328,7 +379,9 @@ export function ComposePanel({
             <Field label="Idempotency key">
               <Input
                 value={draft.idempotencyKey}
-                onChange={(event) => update("idempotencyKey", event.target.value)}
+                onChange={(event) =>
+                  update("idempotencyKey", event.target.value)
+                }
                 className="h-7 text-xs"
               />
             </Field>
@@ -373,9 +426,17 @@ export function ComposePanel({
         </div>
       )}
 
-      <Button onClick={send} disabled={busy || !driver.ready} size="sm" className="self-start">
+      <Button
+        onClick={send}
+        disabled={busy || !driver.ready}
+        size="sm"
+        className="self-start"
+      >
         {busy ? (
-          <Loader2 className="size-3 animate-spin" style={{ animationDuration: "0.6s" }} />
+          <Loader2
+            className="size-3 animate-spin"
+            style={{ animationDuration: "0.6s" }}
+          />
         ) : (
           <SendHorizontal className="size-3" />
         )}
@@ -393,7 +454,9 @@ export function ComposePanel({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="grid gap-1">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="text-[10px] tracking-wider text-muted-foreground uppercase">
+        {label}
+      </span>
       {children}
     </label>
   )

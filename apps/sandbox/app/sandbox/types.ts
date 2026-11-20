@@ -98,6 +98,8 @@ export type SendSandboxEmailInput = {
   unsubscribe?: { global?: boolean; listId?: string; groupId?: string }
   idempotencyKey?: string
   tenantId?: string
+  /** outlook-app: Microsoft tenant of the sending mailbox, passed as sender auth. */
+  outlookTenant?: string
   tags?: string[]
   metadata?: Record<string, string>
   headers?: Record<string, string>

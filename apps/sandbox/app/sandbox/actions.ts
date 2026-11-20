@@ -149,6 +149,14 @@ export const sendSandboxEmail = async (input: SendSandboxEmailInput) => {
     metadata: input.metadata,
     headers: input.headers,
     provider: input.provider,
+    ...(input.outlookTenant
+      ? {
+          sender: {
+            emailDriver,
+            auth: { tenantId: input.outlookTenant },
+          },
+        }
+      : {}),
   }
 
   const result = await client.sendEmail(message)
@@ -462,9 +470,7 @@ const setupWebhook = async (
     const accountWebhooks = (
       client as unknown as {
         webhooks?: {
-          setup: (
-            input: Record<string, unknown>
-          ) => Promise<{
+          setup: (input: Record<string, unknown>) => Promise<{
             webhook?: Webhook
             deleted?: boolean
             context?: unknown
@@ -487,9 +493,7 @@ const setupWebhook = async (
     const mailboxWebhooks = (
       client.mailboxes as unknown as {
         webhooks?: {
-          setup: (
-            input: Record<string, unknown>
-          ) => Promise<{
+          setup: (input: Record<string, unknown>) => Promise<{
             webhook?: Webhook
             deleted?: boolean
             context?: unknown
@@ -512,9 +516,7 @@ const setupWebhook = async (
   const domainWebhooks = (
     client.domains as unknown as {
       webhooks?: {
-        setup: (
-          input: Record<string, unknown>
-        ) => Promise<{
+        setup: (input: Record<string, unknown>) => Promise<{
           webhook?: Webhook
           deleted?: boolean
           context?: unknown
@@ -550,9 +552,7 @@ const refreshWebhook = async (
     const accountWebhooks = (
       client as unknown as {
         webhooks?: {
-          refresh: (
-            input: Record<string, unknown>
-          ) => Promise<{
+          refresh: (input: Record<string, unknown>) => Promise<{
             webhook?: Webhook
             deleted?: boolean
             context?: unknown
@@ -579,9 +579,7 @@ const refreshWebhook = async (
     const mailboxWebhooks = (
       client.mailboxes as unknown as {
         webhooks?: {
-          refresh: (
-            input: Record<string, unknown>
-          ) => Promise<{
+          refresh: (input: Record<string, unknown>) => Promise<{
             webhook?: Webhook
             deleted?: boolean
             context?: unknown
@@ -604,9 +602,7 @@ const refreshWebhook = async (
   const domainWebhooks = (
     client.domains as unknown as {
       webhooks?: {
-        refresh: (
-          input: Record<string, unknown>
-        ) => Promise<{
+        refresh: (input: Record<string, unknown>) => Promise<{
           webhook?: Webhook
           deleted?: boolean
           context?: unknown
@@ -639,9 +635,7 @@ const deleteWebhook = async (
     const accountWebhooks = (
       client as unknown as {
         webhooks?: {
-          delete: (
-            input: Record<string, unknown>
-          ) => Promise<{
+          delete: (input: Record<string, unknown>) => Promise<{
             webhook?: Webhook
             deleted?: boolean
             context?: unknown
@@ -663,9 +657,7 @@ const deleteWebhook = async (
     const mailboxWebhooks = (
       client.mailboxes as unknown as {
         webhooks?: {
-          delete: (
-            input: Record<string, unknown>
-          ) => Promise<{
+          delete: (input: Record<string, unknown>) => Promise<{
             webhook?: Webhook
             deleted?: boolean
             context?: unknown
@@ -683,9 +675,7 @@ const deleteWebhook = async (
   const domainWebhooks = (
     client.domains as unknown as {
       webhooks?: {
-        delete: (
-          input: Record<string, unknown>
-        ) => Promise<{
+        delete: (input: Record<string, unknown>) => Promise<{
           webhook?: Webhook
           deleted?: boolean
           context?: unknown
@@ -831,7 +821,8 @@ export const handleSyncAction = async (
   const scope = input.target.scope
 
   const since = new Date(input.since)
-  if (Number.isNaN(since.getTime())) throw new Error("Invalid 'since' timestamp.")
+  if (Number.isNaN(since.getTime()))
+    throw new Error("Invalid 'since' timestamp.")
   const until = input.until ? new Date(input.until) : undefined
   if (until && Number.isNaN(until.getTime()))
     throw new Error("Invalid 'until' timestamp.")

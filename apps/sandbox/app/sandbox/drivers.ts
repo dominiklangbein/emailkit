@@ -269,10 +269,10 @@ const definitions: DriverDefinition[] = [
     requiredEnv: [
       "OUTLOOK_CLIENT_ID",
       "OUTLOOK_CLIENT_SECRET",
-      "OUTLOOK_APP_TENANT",
       "OUTLOOK_APP_MAILBOXES",
     ],
     optionalEnv: [
+      "OUTLOOK_APP_TENANT",
       "OUTLOOK_WEBHOOK_CLIENT_STATE",
       "PUBLIC_BASE_URL",
       "APP_URL",
@@ -284,7 +284,7 @@ const definitions: DriverDefinition[] = [
         authMode: "application",
         clientId: env("OUTLOOK_CLIENT_ID"),
         clientSecret: env("OUTLOOK_CLIENT_SECRET"),
-        tenant: env("OUTLOOK_APP_TENANT"),
+        tenant: env("OUTLOOK_APP_TENANT") || undefined,
         webhookClientState: env("OUTLOOK_WEBHOOK_CLIENT_STATE") || undefined,
       }),
   },

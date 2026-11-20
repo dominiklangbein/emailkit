@@ -46,6 +46,7 @@ const parseSendInput = (body: unknown): SendSandboxEmailInput => {
     unsubscribe: cleanRecord(record.unsubscribe),
     idempotencyKey: cleanString(record.idempotencyKey),
     tenantId: cleanString(record.tenantId),
+    outlookTenant: cleanString(record.outlookTenant),
     tags: cleanStringArray(record.tags),
     metadata: cleanRecord<Record<string, string>>(record.metadata),
     headers: cleanRecord<Record<string, string>>(record.headers),
