@@ -44,8 +44,8 @@ The `outlook-app` driver uses the app's own token and the mailboxes an admin gra
 ```bash
 OUTLOOK_CLIENT_ID="..."
 OUTLOOK_CLIENT_SECRET="..."
-OUTLOOK_APP_TENANT="contoso.onmicrosoft.com" # optional default; a tenant id or domain, not "common"
+OUTLOOK_APP_TENANT="contoso.onmicrosoft.com" # a tenant id or domain, not "common"
 OUTLOOK_APP_MAILBOXES="support@contoso.com,sales@contoso.com"
 ```
 
-These mailboxes appear in the sync and webhook pickers, and a send from one of them goes through `outlook-app`. Inbound webhooks arrive on `${PUBLIC_BASE_URL}/api/email/outlook-app`; no redirect URI is needed. To send from a mailbox in another tenant, enter that tenant in the Compose panel's Tenant field. Sync and webhooks always use `OUTLOOK_APP_TENANT`.
+These mailboxes appear in the sync and webhook pickers, and a send from one of them goes through `outlook-app`. Inbound webhooks arrive on `${PUBLIC_BASE_URL}/api/email/outlook-app`; no redirect URI is needed. Sync and webhooks use `OUTLOOK_APP_TENANT`. To send from a mailbox in another tenant, enter that tenant in the Compose panel's Tenant field.

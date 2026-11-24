@@ -22,7 +22,7 @@ const createKit = () =>
     issuer: "Microsoft",
     clientId: "client_123",
     clientSecret: "secret_123",
-    tokenEndpoint: TOKEN_URL,
+    tokenEndpoint: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
   });
 
 afterEach(() => {
@@ -37,7 +37,7 @@ describe("clientCredentialsAuth", () => {
       .mockResolvedValueOnce(tokenResponse("app_token_1"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const auth = await createKit().clientCredentialsAuth(SCOPE)();
+    const auth = await createKit().clientCredentialsAuth(SCOPE, TOKEN_URL)();
 
     expect(auth.accessToken).toBe("app_token_1");
     const [url, init] = fetchMock.mock.calls[0];
@@ -57,7 +57,7 @@ describe("clientCredentialsAuth", () => {
       .mockResolvedValueOnce(tokenResponse("app_token_1"))
       .mockResolvedValueOnce(tokenResponse("app_token_2"));
     vi.stubGlobal("fetch", fetchMock);
-    const getAuth = createKit().clientCredentialsAuth(SCOPE);
+    const getAuth = createKit().clientCredentialsAuth(SCOPE, TOKEN_URL);
 
     expect((await getAuth()).accessToken).toBe("app_token_1");
     expect((await getAuth()).accessToken).toBe("app_token_1");
@@ -73,7 +73,7 @@ describe("clientCredentialsAuth", () => {
       .fn()
       .mockResolvedValueOnce(tokenResponse("app_token_1"));
     vi.stubGlobal("fetch", fetchMock);
-    const getAuth = createKit().clientCredentialsAuth(SCOPE);
+    const getAuth = createKit().clientCredentialsAuth(SCOPE, TOKEN_URL);
 
     const [a, b] = await Promise.all([getAuth(), getAuth()]);
 
@@ -96,7 +96,7 @@ describe("clientCredentialsAuth", () => {
       )
       .mockResolvedValueOnce(tokenResponse("app_token_1"));
     vi.stubGlobal("fetch", fetchMock);
-    const getAuth = createKit().clientCredentialsAuth(SCOPE);
+    const getAuth = createKit().clientCredentialsAuth(SCOPE, TOKEN_URL);
 
     await expect(getAuth()).rejects.toMatchObject({
       httpStatus: 401,

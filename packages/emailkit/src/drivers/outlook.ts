@@ -204,7 +204,7 @@ export interface OutlookApplicationDriverConfig<
   authMode: "application";
   /**
    * Default tenant id or verified domain, used when an operation's auth has no
-   * `tenantId` and a webhook notification has none. Optional for multi-tenant
+   * `tenant` and a webhook notification has none. Optional for multi-tenant
    * apps. "common", "organizations" and "consumers" are rejected.
    */
   tenant?: string;
@@ -223,7 +223,7 @@ export type OutlookMailboxAuth = OAuthMailboxAuth;
  * in. Store it like any other mailbox auth and pass it as `auth`/`sender.auth`.
  */
 export interface OutlookApplicationAuth {
-  tenantId: string;
+  tenant: string;
 }
 
 export type OutlookSendEmailMode = "sendMail" | "draft";
@@ -512,7 +512,7 @@ interface GraphAttachment {
 interface OutlookAttachmentProviderMetadata {
   notification?: GraphChangeNotification;
   /** Application mode: tenant of the mailbox the message belongs to. */
-  tenantId?: string;
+  tenant?: string;
   query?: Record<string, string>;
   mailboxEmail?: string;
   mailboxId?: string;
@@ -672,7 +672,7 @@ export const isOutlookApplicationAuth = (
 ): auth is OutlookApplicationAuth =>
   typeof auth === "object" &&
   auth !== null &&
-  nonEmptyString((auth as { tenantId?: unknown }).tenantId) !== undefined;
+  nonEmptyString((auth as { tenant?: unknown }).tenant) !== undefined;
 
 const configuredWebhookAuth = async (
   config: AnyOutlookDriverConfig,
@@ -1217,20 +1217,19 @@ export function OutlookDriver(
 
   // Application mode authenticates as the app: every mailbox and webhook
   // operation uses a cached client-credentials token for the mailbox's tenant
-  // instead of user auth.
-  // shortcut: one cached token getter per tenant, never evicted; fine for a
-  // bounded set of customer tenants, add eviction if tenants become unbounded.
+  // instead of user auth. A getter whose token request fails is dropped, so
+  // failed or mistyped tenants are not retained.
   const applicationTokenGetters = new Map<
     string,
     () => Promise<OutlookMailboxAuth>
   >();
-  const getApplicationAuth = (
-    tenantId?: string,
+  const getApplicationAuth = async (
+    authTenant?: string,
   ): Promise<OutlookMailboxAuth> => {
-    const tenant = (tenantId ?? config.tenant)?.trim();
+    const tenant = (authTenant ?? config.tenant)?.trim();
     if (!tenant || !isApplicationTenant(tenant)) {
       throw new EmailKitError(
-        'Outlook application auth requires a concrete tenant: pass auth { tenantId } or set the driver tenant (not "common", "organizations" or "consumers")',
+        'Outlook application auth requires a concrete tenant: pass auth { tenant } or set the driver tenant (not "common", "organizations" or "consumers")',
         PROVIDER,
         "MISSING_TENANT",
       );
@@ -1244,7 +1243,14 @@ export function OutlookDriver(
       );
       applicationTokenGetters.set(key, getter);
     }
-    return getter();
+    try {
+      return await getter();
+    } catch (error) {
+      if (applicationTokenGetters.get(key) === getter) {
+        applicationTokenGetters.delete(key);
+      }
+      throw error;
+    }
   };
   // A wrong auth shape must fail here: falling back to the default tenant
   // would turn it into a misleading Graph 404 for the customer mailbox.
@@ -1256,20 +1262,20 @@ export function OutlookDriver(
     if (auth === undefined) return undefined;
     if (!isOutlookApplicationAuth(auth)) {
       throw new EmailKitError(
-        "Outlook application auth must be { tenantId: string }",
+        "Outlook application auth must be { tenant: string }",
         PROVIDER,
         "INVALID_INPUT",
       );
     }
-    return auth.tenantId;
+    return auth.tenant;
   };
   const resolveMailboxOperationAuth: typeof resolveDelegatedMailboxAuth =
     applicationAuthMode
       ? async (_operation, input, options) =>
           getApplicationAuth(applicationTenantFrom(input, options))
       : resolveDelegatedMailboxAuth;
-  // Notifications reach this only after their clientState was verified, and
-  // a token for another tenant cannot read the message anyway.
+  // Notifications reach this only after their clientState was verified; that
+  // check is the only gate, the notification's tenantId then picks the token.
   const webhookAuthFromConfig: typeof configuredWebhookAuth =
     applicationAuthMode
       ? async (_config, _request, notification) =>
@@ -1700,7 +1706,7 @@ export function OutlookDriver(
     const metadata = outlookProviderMetadata(init?.provider);
     if (applicationAuthMode) {
       return getApplicationAuth(
-        nonEmptyString(metadata?.tenantId) ??
+        nonEmptyString(metadata?.tenant) ??
           nonEmptyString(metadata?.notification?.tenantId),
       );
     }
@@ -2548,11 +2554,11 @@ export function OutlookDriver(
           input.signal,
         );
         // Lets providerFetch pick the right tenant for synced attachments.
-        const tenantId = applicationAuthMode
+        const tenant = applicationAuthMode
           ? applicationTenantFrom(input, options)
           : undefined;
-        const messageProvider = tenantId
-          ? { ...attachmentProvider, tenantId }
+        const messageProvider = tenant
+          ? { ...attachmentProvider, tenant }
           : attachmentProvider;
         const until = input.until || new Date();
         const mailboxEmails = outlookMailboxEmails(input);

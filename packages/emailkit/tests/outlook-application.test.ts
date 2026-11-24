@@ -700,7 +700,7 @@ describe("OutlookDriver multi-tenant application auth", () => {
     receivedDateTime: "2026-05-21T10:30:00Z",
   };
 
-  it("requests and caches one token per tenant from auth.tenantId", async () => {
+  it("requests and caches one token per tenant from auth.tenant", async () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
       return url.endsWith("/token")
@@ -710,8 +710,8 @@ describe("OutlookDriver multi-tenant application auth", () => {
     vi.stubGlobal("fetch", fetchMock);
     const driver = createMultiTenantDriver({ tenant: "tenant_default" });
 
-    for (const tenantId of ["tenant_a", "Tenant_A", "tenant_b"]) {
-      await driver.sendEmail(message, { mailbox: MAILBOX, auth: { tenantId } });
+    for (const tenant of ["tenant_a", "Tenant_A", "tenant_b"]) {
+      await driver.sendEmail(message, { mailbox: MAILBOX, auth: { tenant } });
     }
     await driver.sendEmail(message, { mailbox: MAILBOX });
 
@@ -735,6 +735,35 @@ describe("OutlookDriver multi-tenant application auth", () => {
     ]);
   });
 
+  it("requests a token again after a failed token request", async () => {
+    let failToken = true;
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (!url.endsWith("/token")) return new Response(null, { status: 202 });
+      if (failToken) {
+        failToken = false;
+        return json({ error: "invalid_tenant" }, 400);
+      }
+      return tokenFor(url);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const driver = createMultiTenantDriver();
+    const send = () =>
+      driver.sendEmail(message, {
+        mailbox: MAILBOX,
+        auth: { tenant: "tenant_a" },
+      });
+
+    await expect(send()).rejects.toThrow();
+    await send();
+
+    expect(
+      calls(fetchMock)
+        .filter((call) => call.url.endsWith("/token"))
+        .map((call) => call.url),
+    ).toEqual([tokenUrl("tenant_a"), tokenUrl("tenant_a")]);
+  });
+
   it("passes sender.auth through the EmailKit client", async () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
@@ -750,7 +779,7 @@ describe("OutlookDriver multi-tenant application auth", () => {
       sender: {
         emailDriver: "outlook",
         mailbox: MAILBOX,
-        auth: { tenantId: "tenant_a" },
+        auth: { tenant: "tenant_a" },
       },
     });
 
@@ -764,7 +793,7 @@ describe("OutlookDriver multi-tenant application auth", () => {
 
   it.each([
     ["no tenant anywhere", undefined],
-    ["a shared tenant in auth", { tenantId: "common" }],
+    ["a shared tenant in auth", { tenant: "common" }],
   ])("rejects %s before requesting a token", async (_label, auth) => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -792,7 +821,7 @@ describe("OutlookDriver multi-tenant application auth", () => {
     },
   );
 
-  it("uses auth.tenantId for webhook setup and sync", async () => {
+  it("uses auth.tenant for webhook setup and sync", async () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
       if (url.endsWith("/token")) return tokenFor(url);
@@ -815,13 +844,13 @@ describe("OutlookDriver multi-tenant application auth", () => {
       mailbox: MAILBOX,
       url: WEBHOOK_URL,
       events: ["inbound"],
-      auth: { tenantId: "tenant_a" },
+      auth: { tenant: "tenant_a" },
     });
     const events = await drain(
       driver.sync!.mailbox!({
         mailbox: MAILBOX,
         since: new Date("2026-01-01"),
-        auth: { tenantId: "tenant_b" },
+        auth: { tenant: "tenant_b" },
       }),
     );
 
@@ -834,7 +863,7 @@ describe("OutlookDriver multi-tenant application auth", () => {
     ]);
     expect(events[0]).toMatchObject({
       data: {
-        attachments: [{ provider: { outlook: { tenantId: "tenant_b" } } }],
+        attachments: [{ provider: { outlook: { tenant: "tenant_b" } } }],
       },
     });
   });
@@ -919,7 +948,7 @@ describe("OutlookDriver multi-tenant application auth", () => {
     const driver = createMultiTenantDriver();
 
     await driver.providerFetch!("users/user_guid/mailFolders", {
-      provider: { outlook: { tenantId: "tenant_a" } },
+      provider: { outlook: { tenant: "tenant_a" } },
     });
     await driver.providerFetch!("users/user_guid/mailFolders", {
       provider: { outlook: { notification: { tenantId: "tenant_b" } } },
@@ -948,7 +977,7 @@ describe("OutlookDriver multi-tenant application auth", () => {
         mailbox: MAILBOX,
         url: WEBHOOK_URL,
         events: ["inbound"],
-        auth: { tenantId: "tenant_123" },
+        auth: { tenant: "tenant_123" },
       });
       return JSON.parse(String(calls(fetchMock).at(-1)!.body)).clientState;
     };

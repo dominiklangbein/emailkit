@@ -235,8 +235,8 @@ const outlookMixedClient = EmailKit({
 });
 void outlookMixedClient;
 
-// Application (Exchange RBAC) mode: app-only token, no mailbox connect, no
-// per-send auth, a concrete tenant.
+// Application (Exchange RBAC) mode: app-only token, no mailbox connect, a
+// default tenant that per-mailbox auth { tenant } can override.
 const outlookAppDriver = OutlookDriver({
   id: "outlook-app",
   clientId: "client_123",
@@ -286,24 +286,24 @@ outlookAppClient.sendEmail({
   text: "Hi",
   sender: {
     emailDriver: "outlook-app" as const,
-    auth: { tenantId: "tenant_123" } satisfies OutlookApplicationAuth,
+    auth: { tenant: "tenant_123" } satisfies OutlookApplicationAuth,
   },
 });
 void outlookAppClient.mailboxes.webhooks.setup({
   emailDriver: "outlook-app",
-  auth: { tenantId: "tenant_123" },
+  auth: { tenant: "tenant_123" },
   mailbox: { id: "user_guid", email: "support@example.com" },
   events: ["inbound"],
 });
 void outlookAppClient.mailboxes.webhooks.refresh({
   emailDriver: "outlook-app",
-  auth: { tenantId: "tenant_123" },
+  auth: { tenant: "tenant_123" },
   providerId: "sub_123",
   mailbox: { id: "user_guid", email: "support@example.com" },
 });
 void outlookAppClient.mailboxes.sync({
   emailDriver: "outlook-app",
-  auth: { tenantId: "tenant_123" },
+  auth: { tenant: "tenant_123" },
   mailbox: { id: "user_guid", email: "support@example.com" },
   since: new Date(),
 });

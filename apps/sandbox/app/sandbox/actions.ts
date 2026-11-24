@@ -153,7 +153,7 @@ export const sendSandboxEmail = async (input: SendSandboxEmailInput) => {
       ? {
           sender: {
             emailDriver,
-            auth: { tenantId: input.outlookTenant },
+            auth: { tenant: input.outlookTenant },
           },
         }
       : {}),

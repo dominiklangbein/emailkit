@@ -475,12 +475,12 @@ export const createOAuthMailboxKit = <TAuth extends OAuthMailboxAuth>({
   /**
    * App-only (client-credentials) token getter. The token is cached and
    * concurrent callers share one request, so the request is bounded by its own
-   * timeout instead of any single caller's signal. `endpoint` overrides the
-   * token endpoint, e.g. to request a token for another Microsoft tenant.
+   * timeout instead of any single caller's signal. `endpoint` is the token
+   * endpoint, e.g. the Microsoft tenant's.
    */
   const clientCredentialsAuth = (
     scope: string,
-    endpoint: string = tokenEndpoint,
+    endpoint: string,
   ): (() => Promise<TAuth>) => {
     const form = new URLSearchParams({
       client_id: clientId,
